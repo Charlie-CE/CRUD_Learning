@@ -1,16 +1,28 @@
 using Dapper;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Formatters;
 using Npgsql;
-using System;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowVue",
+        policy =>
+        {
+            policy
+                .WithOrigins("http://localhost:5174") // 你的 Vue 地址
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+        });
+});
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+
+app.UseCors("AllowVue");
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -48,7 +60,6 @@ app.MapGet("/user/{id}", async ([FromRoute] int id) =>
     FROM users
     WHERE id = @Id;
     """;
-
     var user = await connection.QueryFirstOrDefaultAsync<UserDbModel>(sql, new { Id = id });
 
     if (user is null)
@@ -66,7 +77,7 @@ app.MapGet("/user", async () =>
 {
     using var connection = new NpgsqlConnection(connectionString);
     var sql = """
-    SELECT *
+    SELECT id, plan_name, planned_hours, actual_hours, abandoned
     FROM users
     """;
 
@@ -83,84 +94,66 @@ app.MapGet("/user", async () =>
 /* ================================= */
 /* Update（更新）*/
 /* ================================= */
-//app.MapPut("/user/:{plan_name}/{id}", async ([FromBody] UpdatePlan_name UserPlan_name) =>
-//{
-//    using var connection = new NpgsqlConnection(connectionString);
-//    var sql = """
-//    UPDATE users
-//    SET plan_name = @Plan_name
-//    WHERE id = @Id
-//    """;
+app.MapPut("/user", async ([FromQuery(Name = "id")] int id, [FromBody] UpdateUserRequest update) =>
+{
+    using var connection = new NpgsqlConnection(connectionString);
+    var sql = """
+    UPDATE users
+    SET plan_name = @Name, planned_hours = @pHours, actual_hours = @aHours, abandoned = @Abandoned
+    WHERE id = @Id
+    """;
 
-//    var result = await connection.ExecuteScalarAsync<UserDbModel>(sql, UserPlan_name);
+    await connection.ExecuteScalarAsync(sql, new
+    {
+        Id = id,
+        Name = update.plan_name != "" ? update.plan_name : "無輸入內容",
+        pHours = update.planned_hours,
+        aHours = update.actual_hours,
+        Abandoned = update.abandoned
+    });
 
-//    return Results.Ok(result);
-//});
+    return Results.Ok();
+});
 
-//app.MapPost("/user/{planned_hours}", async ([FromRoute] int hours) =>
-//{
-//    using var connection = new NpgsqlConnection(connectionString);
-//    var sql = """
-//    UPDATE users
-//    SET planned_hours = hours
-//    WHERE hours = @Hours;
-//    """;
+app.MapPut("/user/{id}", async ([FromRoute] int id, [FromBody] UpdateUserRequest update) =>
+{
+    using var connection = new NpgsqlConnection(connectionString);
 
-//    var result = await connection.ExecuteScalarAsync<UserDbModel>(sql, new { Hours = hours });
+    var sql = """
+    UPDATE users
+    SET plan_name = @Name, planned_hours = @pHours, actual_hours = @aHours, abandoned = @Abandoned
+    WHERE id = @Id
+    """;
 
-//    return Results.Ok(result);
-//});
+    var result = await connection.ExecuteScalarAsync<UserDbModel>(sql, new
+    {
+        Id = id,
+        Name = update.plan_name != null ? update.plan_name : "無輸入內容",
+        pHours = update.planned_hours != null ? update.planned_hours : 0,
+        aHours = update.actual_hours != null ? update.actual_hours : 0,
+        Abandoned = update.abandoned != null ? update.abandoned : false
+    });
 
-//app.MapPost("/user/{actual_hours}", async ([FromRoute] int hours) =>
-//{
-//    using var connection = new NpgsqlConnection(connectionString);
-//    var sql = """
-//    UPDATE users
-//    SET actual_hours = hours
-//    WHERE hours = @Hours;
-//    """;
+    return Results.Ok(result);
+});
 
-//    var result = await connection.ExecuteScalarAsync<UserDbModel>(sql, new { Hours = hours });
+/* ================================= */
+/* Delete（刪除）*/
+/* ================================= */
+app.MapDelete("/user", async ([FromQuery(Name = "id")] int id) =>
+{
+    using var connection = new NpgsqlConnection(connectionString);
+    var sql = """
+    DELETE FROM users
+    WHERE id = @Id;
+    """;
 
-//    return Results.Ok(result);
-//});
+    var result = await connection.ExecuteScalarAsync<UserDbModel>(sql, new { Id = id });
 
-//app.MapPost("/user/{abandoned}", async ([FromRoute] bool b) =>
-//{
-//    using var connection = new NpgsqlConnection(connectionString);
-//    var sql = """
-//    UPDATE users
-//    SET abandoned = b
-//    WHERE b = @B;
-//    """;
-
-//    var result = await connection.ExecuteScalarAsync<UserDbModel>(sql, new { B = b });
-
-//    return Results.Ok(result);
-//});
-
-///* ================================= */
-///* Delete（刪除）*/
-///* ================================= */
-//app.MapPost("/user/{id}", async ([FromRoute] int id) =>
-//{
-//    using var connection = new NpgsqlConnection(connectionString);
-//    var sql = """
-//    DELETE FROM users
-//    WHERE id = @Id;
-//    """;
-
-//    var result = await connection.ExecuteScalarAsync<UserDbModel>(sql, new { Id = id });
-
-//    return Results.Created();
-//});
+    return Results.Ok(result);
+});
 
 app.Run();
-
-internal record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
 
 /// <summary>
 /// 表單內容
@@ -186,10 +179,12 @@ public class CreateUserRequest
 }
 
 /// <summary>
-/// 更新表單 plan_name
+/// 更新表單
 /// </summary>
-public class UpdatePlan_name
+public class UpdateUserRequest
 {
-    public required int Id { get; set; }
-    public required string plan_name { get; set; }
+    public required string? plan_name { get; set; }
+    public required int? planned_hours { get; set; }
+    public required int? actual_hours { get; set; }
+    public required bool? abandoned { get; set; }
 }
